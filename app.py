@@ -7,186 +7,170 @@ from google.oauth2.service_account import Credentials
 # --- CONFIG ---
 st.set_page_config(page_title="PatiLog", page_icon="🐾", layout="wide")
 
+# --- MOBILE CSS TWEAKS ---
+# This removes top padding and makes cards look better on mobile
+st.markdown("""
+<style>
+    .stApp {background-color: #0E1117;}
+    .block-container {padding-top: 2rem;} 
+    div[data-testid="stMetricValue"] {font-size: 1.2rem;}
+</style>
+""", unsafe_allow_html=True)
+
 # --- DATABASE CONNECTION ---
-# We use ttl=0 to force it to check for new connections often to avoid stale data
 @st.cache_resource(ttl=60)
 def get_db():
     creds_dict = st.secrets["gcp_service_account"]
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
     return client.open("PatiLog_DB")
 
-# --- DATA FUNCTIONS ---
+# --- FUNCTIONS ---
 def load_data():
     try:
         sh = get_db()
         worksheet = sh.get_worksheet(0)
         data = worksheet.get_all_records()
-        df = pd.DataFrame(data)
-        return df
+        return pd.DataFrame(data)
     except Exception:
         return pd.DataFrame()
 
 def save_entry(pet_name, vaccine, date_applied, next_due_date, weight):
     sh = get_db()
     worksheet = sh.get_worksheet(0)
-    
-    # Headers check
     if not worksheet.get_all_values():
         worksheet.append_row(["Pet İsmi", "Aşı Tipi", "Uygulama Tarihi", "Sonraki Tarih", "Kilo (kg)"])
-    
     worksheet.append_row([pet_name, vaccine, str(date_applied), str(next_due_date), weight])
 
 def delete_rows(indexes_to_keep):
-    """
-    Rewrites the google sheet with only the rows we want to keep.
-    This is safer than deleting by index which can shift during operation.
-    """
     sh = get_db()
     worksheet = sh.get_worksheet(0)
-    
-    # Get all data as dataframe
     df = load_data()
-    
-    # Filter dataframe
     if not df.empty:
-        # We keep rows that are in the 'indexes_to_keep' list
-        # We adjust for 0-based index vs 1-based sheet
         df_cleaned = df.iloc[indexes_to_keep]
-        
-        # Clear Sheet
         worksheet.clear()
-        
-        # Write Headers
         worksheet.append_row(["Pet İsmi", "Aşı Tipi", "Uygulama Tarihi", "Sonraki Tarih", "Kilo (kg)"])
-        
-        # Write Data
         if not df_cleaned.empty:
             worksheet.append_rows(df_cleaned.values.tolist())
 
 # --- SIDEBAR ---
-st.sidebar.header("🐾 PatiLog")
-menu = st.sidebar.radio("Menü", ["Genel Bakış ve Düzenleme", "Yeni Kayıt Ekle"])
-
-# Always load fresh data
+st.sidebar.title("🐾 PatiLog")
+menu = st.sidebar.radio("Menü", ["Genel Bakış (Kartlar)", "Düzenle / Sil", "Yeni Kayıt Ekle"])
 df = load_data()
 
-# --- PAGE 1: GENEL BAKIŞ & DELETE ---
-if menu == "Genel Bakış ve Düzenleme":
-    st.header("📊 Genel Durum ve Düzenleme")
+# --- PAGE 1: CARD VIEW (Mobile Friendly) ---
+if menu == "Genel Bakış (Kartlar)":
+    st.header("🐶🐱 Evcil Hayvanlarım")
     
     if not df.empty:
-        # Pre-processing for display
+        # Sort by Date
         if "Sonraki Tarih" in df.columns:
             df["Sonraki Tarih"] = pd.to_datetime(df["Sonraki Tarih"], format="%Y-%m-%d", errors='coerce')
             df = df.sort_values(by="Sonraki Tarih")
         
-        # Add a "Sil" column for the editor (Starts as False)
+        # Create Cards
+        for index, row in df.iterrows():
+            pet_type = "🐶" if "Köpek" in str(row.get("Pet İsmi", "")) else "🐱" if "Kedi" in str(row.get("Pet İsmi", "")) else "🐾"
+            
+            # Card Container
+            with st.container(border=True):
+                c1, c2 = st.columns([2, 1])
+                with c1:
+                    st.subheader(f"{pet_type} {row['Pet İsmi']}")
+                    st.write(f"**İşlem:** {row['Aşı Tipi']}")
+                    st.caption(f"Kilo: {row['Kilo (kg)']} kg")
+                with c2:
+                    due_date = row['Sonraki Tarih']
+                    if pd.notnull(due_date):
+                        days_left = (due_date.date() - date.today()).days
+                        date_str = due_date.strftime('%d.%m.%Y')
+                        
+                        if days_left < 7:
+                            st.error(f"{days_left} Gün!")
+                            st.caption(date_str)
+                        elif days_left < 30:
+                            st.warning(f"{days_left} Gün")
+                            st.caption(date_str)
+                        else:
+                            st.success(date_str)
+    else:
+        st.info("Henüz kayıt yok.")
+
+# --- PAGE 2: TABLE VIEW (For Deletion) ---
+elif menu == "Düzenle / Sil":
+    st.header("📝 Kayıt Yönetimi")
+    st.caption("Silmek istediğiniz satırları seçip alttaki butona basın.")
+    
+    if not df.empty:
         df["Sil"] = False
-        
-        # Configure columns for the editor
+        if "Sonraki Tarih" in df.columns:
+            df["Sonraki Tarih"] = pd.to_datetime(df["Sonraki Tarih"], format="%Y-%m-%d", errors='coerce')
+            df = df.sort_values(by="Sonraki Tarih")
+
         column_config = {
-            "Sil": st.column_config.CheckboxColumn("Sil?", help="Silmek için işaretleyin", default=False),
-            "Pet İsmi": st.column_config.TextColumn("Evcil Hayvan", disabled=True),
+            "Sil": st.column_config.CheckboxColumn("Sil?", default=False, width="small"),
+            "Pet İsmi": st.column_config.TextColumn("İsim", disabled=True),
             "Aşı Tipi": st.column_config.TextColumn("İşlem", disabled=True),
-            "Sonraki Tarih": st.column_config.DateColumn("Sonraki Randevu", format="DD.MM.YYYY", disabled=True),
-            "Kilo (kg)": st.column_config.NumberColumn("Kilo", format="%.1f kg", disabled=True),
-            "Uygulama Tarihi": st.column_config.DateColumn("Yapılan Tarih", format="DD.MM.YYYY", disabled=True)
+            "Sonraki Tarih": st.column_config.DateColumn("Tarih", format="DD.MM.YYYY", disabled=True),
+            "Kilo (kg)": st.column_config.NumberColumn("Kg", format="%.1f", disabled=True),
+            "Uygulama Tarihi": st.column_config.DateColumn("Yapıldı", format="DD.MM.YYYY", disabled=True)
         }
 
-        # EDITABLE DATA FRAME
-        st.info("Kayıt silmek için tablodaki 'Sil' kutucuğunu işaretleyin ve alttaki butona basın.")
-        edited_df = st.data_editor(
-            df,
-            column_config=column_config,
-            hide_index=True,
-            use_container_width=True,
-            num_rows="fixed" # User cannot add rows here, only check boxes
-        )
+        edited_df = st.data_editor(df, column_config=column_config, hide_index=True, use_container_width=True)
 
-        # DELETE BUTTON LOGIC
-        # We check which rows have 'Sil' == True in the edited version
         rows_to_delete = edited_df[edited_df["Sil"] == True]
-        
         if not rows_to_delete.empty:
             st.write("")
             if st.button(f"🗑️ Seçili {len(rows_to_delete)} Kaydı Sil", type="primary"):
-                # Find indexes of rows where Sil is FALSE (The ones to keep)
-                # We use the original index from the loaded dataframe
                 indexes_to_keep = edited_df[edited_df["Sil"] == False].index.tolist()
-                
                 try:
-                    with st.spinner("Kayıtlar güncelleniyor..."):
-                        delete_rows(indexes_to_keep)
-                    st.success("Kayıtlar silindi!")
-                    st.rerun() # Force Reload
+                    delete_rows(indexes_to_keep)
+                    st.success("Silindi!")
+                    st.rerun()
                 except Exception as e:
-                    st.error(f"Silme hatası: {e}")
+                    st.error(f"Hata: {e}")
 
-    else:
-        st.info("Henüz kayıt bulunmuyor.")
-
-# --- PAGE 2: YENI KAYIT ---
+# --- PAGE 3: NEW ENTRY ---
 elif menu == "Yeni Kayıt Ekle":
-    st.header("💉 Yeni Kayıt Girişi")
-
-    col1, col2 = st.columns(2)
+    st.header("💉 Yeni Giriş")
     
+    col1, col2 = st.columns(2)
     with col1:
-        # --- SMART PET SELECTOR ---
-        # Get unique pet names
-        existing_names = []
-        if not df.empty and "Pet İsmi" in df.columns:
-            existing_names = [x for x in df["Pet İsmi"].unique() if str(x).strip() != ""]
-        
-        # Add "Add New" option to the list
+        existing_names = [x for x in df["Pet İsmi"].unique() if str(x).strip() != ""] if not df.empty else []
         options = existing_names + ["➕ Yeni Ekle..."]
-        
-        selected_option = st.selectbox("Evcil Hayvan", options)
-        
-        if selected_option == "➕ Yeni Ekle...":
-            pet_name = st.text_input("Evcil Hayvan İsmi Giriniz")
-        else:
-            pet_name = selected_option # Use selected name
+        sel = st.selectbox("Evcil Hayvan", options)
+        pet_name = st.text_input("İsim Giriniz") if sel == "➕ Yeni Ekle..." else sel
 
-        vaccine = st.selectbox("İşlem Tipi", ["Karma (DHPP)", "Kuduz", "Bronşin", "Lösemi", "İç Parazit", "Dış Parazit", "Genel Kontrol"])
+        # Updated Vaccine List
+        vaccine = st.selectbox("İşlem Tipi", ["Karma (DHPP)", "Kuduz", "Bronşin", "Lösemi", "Lyme", "İç Parazit", "Dış Parazit", "Check-up"])
         weight = st.number_input("Güncel Kilo (kg)", min_value=0.0, step=0.1, format="%.1f")
 
     with col2:
         date_applied = st.date_input("Uygulama Tarihi", date.today())
         
-        st.divider()
-        st.write("📅 **Sonraki Tarih**")
+        st.write("---")
+        st.write("📅 **Geçerlilik Süresi**")
         
-        # Dropdown for Timing
-        timing_choice = st.selectbox(
-            "Hatırlatma Zamanı", 
-            ["1 Ay Sonra", "2 Ay Sonra", "3 Ay Sonra", "6 Ay Sonra", "12 Ay Sonra", "📅 Manuel Tarih Seçimi"]
-        )
+        timing = st.selectbox("Süre Seçimi", ["1 Ay", "2 Ay", "3 Ay", "6 Ay", "1 Yıl", "Manuel Tarih"])
         
         final_due_date = None
-        
-        if timing_choice == "📅 Manuel Tarih Seçimi":
-            final_due_date = st.date_input("Tarih Seçiniz", min_value=date_applied)
+        if timing == "Manuel Tarih":
+            final_due_date = st.date_input("Bitiş Tarihi", min_value=date_applied)
         else:
-            # Extract number from string (e.g., "3 Ay Sonra" -> 3)
-            months = int(timing_choice.split(" ")[0])
+            months = 12 if "Yıl" in timing else int(timing.split(" ")[0])
             final_due_date = date_applied + timedelta(days=months*30)
-            st.info(f"👉 Hedef Tarih: {final_due_date.strftime('%d.%m.%Y')}")
+
+        # THE NOTIFICATION PREVIEW
+        reminder_date = final_due_date - timedelta(days=7)
+        st.caption(f"✅ **Aşı Bitiş Tarihi:** {final_due_date.strftime('%d.%m.%Y')}")
+        st.info(f"🔔 **Hatırlatma Maili:** {reminder_date.strftime('%d.%m.%Y')} tarihinde gönderilecek.")
 
     st.write("")
     if st.button("Kaydet", type="primary", use_container_width=True):
         if pet_name:
-            try:
-                save_entry(pet_name, vaccine, date_applied, final_due_date, weight)
-                st.success("✅ Kayıt eklendi! Tablo güncelleniyor...")
-                # The Golden Fix: Force Rerun
-                st.rerun() 
-            except Exception as e:
-                st.error(f"Hata: {e}")
+            save_entry(pet_name, vaccine, date_applied, final_due_date, weight)
+            st.success("Kaydedildi!")
+            st.rerun()
         else:
-            st.warning("Lütfen bir isim giriniz.")
+            st.warning("İsim giriniz.")
