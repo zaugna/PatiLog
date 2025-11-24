@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go # <--- THE NEW CHARTING ENGINE
+import plotly.graph_objects as go
 from datetime import date, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
@@ -20,7 +20,7 @@ st.markdown("""
     /* 3. Sidebar */
     [data-testid="stSidebar"] { background-color: #262730; }
     
-    /* 4. Dropdowns & Popups (Fixing White Flash) */
+    /* 4. Dropdowns & Popups */
     div[data-baseweb="popover"], div[data-baseweb="menu"], div[role="listbox"] {
         background-color: #262730 !important;
     }
@@ -58,6 +58,9 @@ st.markdown("""
     .js-plotly-plot .plotly .main-svg {
         background-color: transparent !important;
     }
+    
+    /* 8. Table Background */
+    [data-testid="stDataFrame"] { background-color: #262730; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -142,7 +145,7 @@ if menu == "Genel Bakış (Kartlar)":
                 
                 st.write("---")
                 
-                # --- NEW PLOTLY CHART (The "Pro" Look) ---
+                # --- NEW PLOTLY CHART ---
                 if "Kilo (kg)" in pet_df.columns and "Uygulama Tarihi" in pet_df.columns:
                     st.caption("📉 Kilo Değişimi")
                     chart_data = pet_df[["Uygulama Tarihi", "Kilo (kg)"]].copy()
@@ -150,29 +153,26 @@ if menu == "Genel Bakış (Kartlar)":
                     chart_data = chart_data.dropna().sort_values("Uygulama Tarihi")
                     
                     if not chart_data.empty:
-                        # Create Plotly Figure
                         fig = go.Figure()
                         
-                        # Add the Smooth Line (Spline)
                         fig.add_trace(go.Scatter(
                             x=chart_data["Uygulama Tarihi"], 
                             y=chart_data["Kilo (kg)"],
-                            mode='lines+markers', # Show both line and dots
-                            line=dict(color='#FF4B4B', width=3, shape='spline'), # Red, Thick, Curved
-                            marker=dict(size=8, color='#0E1117', line=dict(color='#FF4B4B', width=2)), # Dark dots with Red border
-                            fill='tozeroy', # Fill area under line
-                            fillcolor='rgba(255, 75, 75, 0.1)', # Very faint red fill
+                            mode='lines+markers',
+                            line=dict(color='#FF4B4B', width=3, shape='spline'),
+                            marker=dict(size=8, color='#0E1117', line=dict(color='#FF4B4B', width=2)),
+                            fill='tozeroy',
+                            fillcolor='rgba(255, 75, 75, 0.1)',
                             name='Kilo'
                         ))
 
-                        # Clean up the layout (Remove grids, transparent background)
                         fig.update_layout(
                             paper_bgcolor='rgba(0,0,0,0)',
                             plot_bgcolor='rgba(0,0,0,0)',
                             margin=dict(l=0, r=0, t=10, b=0),
                             height=250,
                             xaxis=dict(showgrid=False, showline=False, tickformat="%d.%m"),
-                            yaxis=dict(showgrid=True, gridcolor='#262730', zeroline=False), # Faint horizontal grid only
+                            yaxis=dict(showgrid=True, gridcolor='#262730', zeroline=False),
                             hovermode="x unified"
                         )
                         
@@ -183,7 +183,9 @@ if menu == "Genel Bakış (Kartlar)":
                 display_df = pet_df[["Aşı Tipi", "Uygulama Tarihi", "Sonraki Tarih"]].copy()
                 display_df["Uygulama Tarihi"] = pd.to_datetime(display_df["Uygulama Tarihi"]).dt.strftime('%d.%m.%Y')
                 display_df["Sonraki Tarih"] = pd.to_datetime(display_df["Sonraki Tarih"]).dt.strftime('%d.%m.%Y')
-                st.table(display_df)
+                
+                # --- FIX: USE DATAFRAME TO HIDE INDEX ---
+                st.dataframe(display_df, hide_index=True, use_container_width=True)
 
     else:
         st.info("Kayıt yok.")
@@ -252,3 +254,4 @@ elif menu == "Yeni Kayıt Ekle":
             st.rerun()
         else:
             st.warning("İsim giriniz.")
+
