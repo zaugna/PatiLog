@@ -14,7 +14,10 @@ st.set_page_config(page_title="PatiLog", page_icon="🐾", layout="wide")
 def get_db():
     # Load secrets directly (The Bulletproof Way)
     creds_dict = st.secrets["gcp_service_account"]
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
     return client.open("PatiLog_DB")
