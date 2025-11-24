@@ -1,5 +1,3 @@
-
-
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
@@ -12,8 +10,8 @@ st.set_page_config(page_title="PatiLog", page_icon="🐾", layout="wide")
 # --- DATABASE CONNECTION ---
 @st.cache_resource
 def get_db():
-    # Load secrets directly (The Bulletproof Way)
     creds_dict = st.secrets["gcp_service_account"]
+    # Broader scopes to find the file
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
@@ -27,105 +25,119 @@ def load_data():
     try:
         sh = get_db()
         worksheet = sh.get_worksheet(0)
+        # expected_headers helps if sheet is empty/weird
         data = worksheet.get_all_records()
-        df = pd.DataFrame(data)
-        return df
-    except Exception as e:
+        return pd.DataFrame(data)
+    except Exception:
         return pd.DataFrame()
 
 def save_entry(pet_name, vaccine, date_applied, next_due_date, weight):
     sh = get_db()
     worksheet = sh.get_worksheet(0)
-    # Add headers if empty
+    
+    # If header is missing, add it
     if not worksheet.get_all_values():
         worksheet.append_row(["Pet İsmi", "Aşı Tipi", "Uygulama Tarihi", "Sonraki Tarih", "Kilo (kg)"])
     
     worksheet.append_row([pet_name, vaccine, str(date_applied), str(next_due_date), weight])
 
-# --- APP INTERFACE ---
-st.title("🐾 PatiLog")
-
-# 1. Load Data to find existing pets
-df = load_data()
-existing_pets = []
-if not df.empty and "Pet İsmi" in df.columns:
-    existing_pets = list(df["Pet İsmi"].unique())
-
-# Sidebar Navigation
+# --- SIDEBAR & SETUP ---
+st.sidebar.header("🐾 PatiLog")
 menu = st.sidebar.radio("Menü", ["Genel Bakış", "Yeni Kayıt Ekle"])
 
-# --- PAGE: DASHBOARD ---
+# Load data once at the start
+df = load_data()
+
+# --- PAGE 1: GENEL BAKIŞ ---
 if menu == "Genel Bakış":
     st.header("📊 Genel Durum")
     
     if not df.empty:
-        # Sort by Next Date
-        if "Sonraki Tarih" in df.columns:
-            df["Sonraki Tarih"] = pd.to_datetime(df["Sonraki Tarih"], format="%Y-%m-%d", errors='coerce')
-            df = df.sort_values(by="Sonraki Tarih")
+        # Clean Data Types for Display
+        display_df = df.copy()
+        
+        # Ensure correct column ordering
+        cols = ["Pet İsmi", "Aşı Tipi", "Sonraki Tarih", "Kilo (kg)"]
+        # Only keep columns that actually exist in the sheet
+        cols = [c for c in cols if c in display_df.columns]
+        display_df = display_df[cols]
 
-        # Display Data
+        # Sort Logic
+        if "Sonraki Tarih" in display_df.columns:
+            display_df["Sonraki Tarih"] = pd.to_datetime(display_df["Sonraki Tarih"], format="%Y-%m-%d", errors='coerce')
+            display_df = display_df.sort_values(by="Sonraki Tarih")
+
+        # Table with Explicit Headers
         st.dataframe(
-            df, 
+            display_df,
             column_config={
-                "Sonraki Tarih": st.column_config.DateColumn("Sonraki Aşı", format="DD.MM.YYYY"),
-                "Uygulama Tarihi": st.column_config.DateColumn("Yapılan Tarih", format="DD.MM.YYYY"),
+                "Pet İsmi": st.column_config.TextColumn("Evcil Hayvan"),
+                "Aşı Tipi": st.column_config.TextColumn("Yapılan İşlem"),
+                "Sonraki Tarih": st.column_config.DateColumn("Sonraki Randevu", format="DD.MM.YYYY"),
                 "Kilo (kg)": st.column_config.NumberColumn("Kilo", format="%.1f kg")
             },
             hide_index=True,
             use_container_width=True
         )
     else:
-        st.info("Henüz kayıt yok. Yeni kayıt ekleyerek başlayın.")
+        st.info("Kayıt bulunamadı.")
 
-# --- PAGE: NEW ENTRY ---
+# --- PAGE 2: YENİ KAYIT (No Form Wrapper) ---
 elif menu == "Yeni Kayıt Ekle":
-    st.header("💉 Yeni Kayıt")
+    st.header("💉 Yeni Kayıt Girişi")
+
+    col1, col2 = st.columns(2)
     
-    with st.form("entry_form"):
-        col1, col2 = st.columns(2)
+    with col1:
+        # 1. Pet Name Logic
+        existing_pets = []
+        if not df.empty and "Pet İsmi" in df.columns:
+            existing_pets = [p for p in df["Pet İsmi"].unique() if p] # Filter out empty strings
+            
+        # Toggle between existing or new
+        is_new_pet = st.checkbox("Listede yok (Yeni Pet Ekle)")
         
-        with col1:
-            # Pet Name Selection (Select existing OR type new)
-            st.write("Reference: Evcil Hayvan Seçimi")
-            pet_selection_mode = st.radio("Seçim Modu", ["Listeden Seç", "Yeni Pet Ekle"], horizontal=True, label_visibility="collapsed")
-            
-            if pet_selection_mode == "Listeden Seç" and existing_pets:
-                pet_name = st.selectbox("Evcil Hayvan", existing_pets)
-            else:
-                pet_name = st.text_input("Evcil Hayvan İsmi (Örn: Max, Luna)")
+        if not is_new_pet and existing_pets:
+            pet_name = st.selectbox("Evcil Hayvan Seç", existing_pets)
+        else:
+            pet_name = st.text_input("Evcil Hayvan İsmi Giriniz")
 
-            vaccine = st.selectbox("Aşı / İşlem", ["Karma (DHPP)", "Kuduz", "Bronşin", "Lösemi", "İç Parazit", "Dış Parazit", "Lyme", "Muayene/Kontrol"])
-            weight = st.number_input("Güncel Kilo (kg)", min_value=0.0, step=0.1, format="%.1f")
+        vaccine = st.selectbox("İşlem Tipi", ["Karma (DHPP)", "Kuduz", "Bronşin", "Lösemi", "İç Parazit", "Dış Parazit", "Genel Kontrol"])
+        weight = st.number_input("Güncel Kilo (kg)", min_value=0.0, step=0.1, format="%.1f")
 
-        with col2:
-            date_applied = st.date_input("Uygulama Tarihi", date.today())
-            
-            st.write("---")
-            st.write("📅 **Hatırlatma Zamanlayıcısı**")
-            
-            reminder_method = st.radio("Zamanlama Tipi", ["Ay Bazlı (Otomatik)", "Tarih Seçimi (Manuel)"], horizontal=True)
-            
-            next_due = None
-            
-            if reminder_method == "Ay Bazlı (Otomatik)":
-                months_later = st.slider("Kaç ay sonra hatırlat?", 1, 12, 12)
-                next_due = date_applied + timedelta(days=months_later*30)
-                st.write(f"👉 **Hesaplanan Tarih:** {next_due.strftime('%d.%m.%Y')}")
-            else:
-                next_due = st.date_input("Sonraki Aşı Tarihi")
-
-        # SUBMIT BUTTON (Primary Color Fix)
-        st.write("")
-        submitted = st.form_submit_button("Kaydet", type="primary", use_container_width=True)
+    with col2:
+        date_applied = st.date_input("Uygulama Tarihi", date.today())
         
-        if submitted:
-            if pet_name:
-                try:
-                    save_entry(pet_name, vaccine, date_applied, next_due, weight)
-                    st.success("✅ Kayıt Başarılı!")
-                    st.cache_resource.clear() # Refresh data immediately
-                except Exception as e:
-                    st.error(f"Kayıt Hatası: {e}")
-            else:
-                st.warning("Lütfen bir evcil hayvan ismi girin.")
+        st.divider()
+        st.write("📅 **Hatırlatma Ayarları**")
+        
+        # Radio button to switch modes
+        timing_mode = st.radio("Süre Belirleme:", ["Otomatik (Ay Seçimi)", "Manuel (Tarih Seçimi)"], horizontal=True)
+        
+        final_due_date = None
+        
+        if timing_mode == "Otomatik (Ay Seçimi)":
+            # Bug fix: Dropdown for months
+            month_choice = st.selectbox("Kaç ay sonra?", [1, 2, 3, 12], format_func=lambda x: f"{x} Ay Sonra")
+            
+            # Real-time calculation
+            final_due_date = date_applied + timedelta(days=month_choice*30)
+            st.info(f"👉 **Hesaplanan Sonraki Tarih:** {final_due_date.strftime('%d.%m.%Y')}")
+            
+        else:
+            # Bug fix: Calendar appears instantly
+            final_due_date = st.date_input("Lütfen Tarih Seçiniz", min_value=date_applied)
+
+    st.write("")
+    # Submit Button (Outside of form, triggers manual save)
+    if st.button("Kaydet", type="primary", use_container_width=True):
+        if pet_name:
+            try:
+                save_entry(pet_name, vaccine, date_applied, final_due_date, weight)
+                st.success(f"✅ {pet_name} için kayıt oluşturuldu!")
+                # Force reload to update the list immediately
+                st.cache_resource.clear() 
+            except Exception as e:
+                st.error(f"Hata: {e}")
+        else:
+            st.warning("Lütfen bir isim giriniz.")
