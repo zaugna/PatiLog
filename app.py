@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import altair as alt
+import plotly.graph_objects as go # <--- THE NEW CHARTING ENGINE
 from datetime import date, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
@@ -8,19 +8,19 @@ from google.oauth2.service_account import Credentials
 # --- CONFIG ---
 st.set_page_config(page_title="PatiLog", page_icon="🐾", layout="wide")
 
-# --- THE "NUKE" CSS FIX (Fixes White Dropdowns & Styling) ---
+# --- CSS: DARK MODE & UI POLISH ---
 st.markdown("""
 <style>
-    /* 1. FORCE DARK BACKGROUND EVERYWHERE */
+    /* 1. Main Background */
     .stApp { background-color: #0E1117; }
     
-    /* 2. TEXT COLORS */
+    /* 2. Text Colors */
     h1, h2, h3, h4, h5, h6, p, div, span, li, label { color: #E0E0E0 !important; }
     
-    /* 3. SIDEBAR */
+    /* 3. Sidebar */
     [data-testid="stSidebar"] { background-color: #262730; }
     
-    /* 4. DROPDOWN & DATE PICKER POPUPS (The White Box Fix) */
+    /* 4. Dropdowns & Popups (Fixing White Flash) */
     div[data-baseweb="popover"], div[data-baseweb="menu"], div[role="listbox"] {
         background-color: #262730 !important;
     }
@@ -29,39 +29,35 @@ st.markdown("""
         color: white !important;
         border-color: #4C4C4C !important;
     }
-    /* The actual list items in the dropdown */
     li[role="option"] {
         background-color: #262730 !important;
         color: white !important;
     }
-    /* Hover state for list items */
     li[role="option"]:hover {
         background-color: #FF4B4B !important;
     }
 
-    /* 5. INPUT FIELDS (Text, Number, Date) */
+    /* 5. Inputs */
     input {
         color: white !important;
         background-color: #262730 !important;
     }
 
-    /* 6. EXPANDER / CARD HEADER (Fixing the White Flash) */
+    /* 6. Cards */
     .streamlit-expanderHeader {
         background-color: #262730 !important;
         color: white !important;
         border: 1px solid #4C4C4C;
     }
-    .streamlit-expanderHeader:hover {
-        background-color: #363945 !important;
-        color: #FF4B4B !important;
-    }
     div[data-testid="stExpander"] {
         border: none;
         background-color: transparent;
     }
-
-    /* 7. TABLE FIXES */
-    [data-testid="stDataFrame"] { background-color: #262730; }
+    
+    /* 7. Plotly Chart Background Fix */
+    .js-plotly-plot .plotly .main-svg {
+        background-color: transparent !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -107,7 +103,7 @@ st.sidebar.title("🐾 PatiLog")
 menu = st.sidebar.radio("Menü", ["Genel Bakış (Kartlar)", "Düzenle / Sil", "Yeni Kayıt Ekle"])
 df = load_data()
 
-# --- PAGE 1: CARDS & PRO CHART ---
+# --- PAGE 1: CARDS & NEW PLOTLY CHART ---
 if menu == "Genel Bakış (Kartlar)":
     st.header("🐶🐱 Evcil Hayvan Profilleri")
     
@@ -129,10 +125,10 @@ if menu == "Genel Bakış (Kartlar)":
             
             if days_left < 7:
                 status_emoji = "🚨"
-                status_text = f"Dikkat! {days_left} gün"
+                status_text = f"{days_left} gün!"
             elif days_left < 30:
                 status_emoji = "⚠️"
-                status_text = f"Yaklaşıyor ({days_left} gün)"
+                status_text = f"{days_left} gün"
 
             # CARD
             with st.expander(f"{status_emoji} {icon} {pet}  |  {status_text}"):
@@ -146,7 +142,7 @@ if menu == "Genel Bakış (Kartlar)":
                 
                 st.write("---")
                 
-                # --- PRO CHART (Altair) ---
+                # --- NEW PLOTLY CHART (The "Pro" Look) ---
                 if "Kilo (kg)" in pet_df.columns and "Uygulama Tarihi" in pet_df.columns:
                     st.caption("📉 Kilo Değişimi")
                     chart_data = pet_df[["Uygulama Tarihi", "Kilo (kg)"]].copy()
@@ -154,34 +150,33 @@ if menu == "Genel Bakış (Kartlar)":
                     chart_data = chart_data.dropna().sort_values("Uygulama Tarihi")
                     
                     if not chart_data.empty:
-                        # 1. The Area (Gradient)
-                        area = alt.Chart(chart_data).mark_area(
-                            interpolate='monotone', # Smooth curve
-                            fillOpacity=0.3,
-                            line={'color':'#FF4B4B'}
-                        ).encode(
-                            x=alt.X('Uygulama Tarihi', axis=alt.Axis(format='%d.%m', title=None, labelColor='white', grid=False)),
-                            y=alt.Y('Kilo (kg)', scale=alt.Scale(zero=False, padding=1), axis=alt.Axis(title=None, labelColor='white', grid=False))
+                        # Create Plotly Figure
+                        fig = go.Figure()
+                        
+                        # Add the Smooth Line (Spline)
+                        fig.add_trace(go.Scatter(
+                            x=chart_data["Uygulama Tarihi"], 
+                            y=chart_data["Kilo (kg)"],
+                            mode='lines+markers', # Show both line and dots
+                            line=dict(color='#FF4B4B', width=3, shape='spline'), # Red, Thick, Curved
+                            marker=dict(size=8, color='#0E1117', line=dict(color='#FF4B4B', width=2)), # Dark dots with Red border
+                            fill='tozeroy', # Fill area under line
+                            fillcolor='rgba(255, 75, 75, 0.1)', # Very faint red fill
+                            name='Kilo'
+                        ))
+
+                        # Clean up the layout (Remove grids, transparent background)
+                        fig.update_layout(
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            margin=dict(l=0, r=0, t=10, b=0),
+                            height=250,
+                            xaxis=dict(showgrid=False, showline=False, tickformat="%d.%m"),
+                            yaxis=dict(showgrid=True, gridcolor='#262730', zeroline=False), # Faint horizontal grid only
+                            hovermode="x unified"
                         )
                         
-                        # 2. The Line (Sharp edge)
-                        line = alt.Chart(chart_data).mark_line(
-                            interpolate='monotone',
-                            color='#FF4B4B'
-                        ).encode(
-                            x='Uygulama Tarihi',
-                            y='Kilo (kg)'
-                        )
-
-                        # 3. The Dots (Interactive)
-                        points = alt.Chart(chart_data).mark_circle(size=80, color='white').encode(
-                            x='Uygulama Tarihi',
-                            y='Kilo (kg)',
-                            tooltip=[alt.Tooltip('Uygulama Tarihi', format='%d.%m.%Y'), 'Kilo (kg)']
-                        )
-
-                        final_chart = (area + line + points).properties(height=250).configure_view(strokeWidth=0)
-                        st.altair_chart(final_chart, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
                 st.write("---")
                 st.caption("📜 Geçmiş İşlemler")
@@ -257,5 +252,3 @@ elif menu == "Yeni Kayıt Ekle":
             st.rerun()
         else:
             st.warning("İsim giriniz.")
-
-
