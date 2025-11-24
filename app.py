@@ -7,13 +7,32 @@ from google.oauth2.service_account import Credentials
 # --- CONFIG ---
 st.set_page_config(page_title="PatiLog", page_icon="🐾", layout="wide")
 
-# --- MOBILE CSS TWEAKS ---
-# This removes top padding and makes cards look better on mobile
+# --- CSS: FORCE HIGH CONTRAST (Fixes the Grey Text Issue) ---
 st.markdown("""
 <style>
-    .stApp {background-color: #0E1117;}
-    .block-container {padding-top: 2rem;} 
-    div[data-testid="stMetricValue"] {font-size: 1.2rem;}
+    /* Force main background color */
+    .stApp {
+        background-color: #0E1117;
+    }
+    /* Force all text to be White/Light Grey */
+    h1, h2, h3, h4, h5, h6, p, div, span, label {
+        color: #FAFAFA !important;
+    }
+    /* Fix Input boxes (make them dark with white text) */
+    .stTextInput input, .stSelectbox div, .stNumberInput input, .stDateInput input {
+        color: #FAFAFA !important;
+        background-color: #262730 !important;
+    }
+    /* Fix Table Headers and Cells */
+    div[data-testid="stDataFrame"] {
+        background-color: #262730;
+    }
+    /* Card/Expander Styling */
+    .streamlit-expanderHeader {
+        background-color: #262730;
+        color: white;
+        border-radius: 5px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -59,48 +78,67 @@ st.sidebar.title("🐾 PatiLog")
 menu = st.sidebar.radio("Menü", ["Genel Bakış (Kartlar)", "Düzenle / Sil", "Yeni Kayıt Ekle"])
 df = load_data()
 
-# --- PAGE 1: CARD VIEW (Mobile Friendly) ---
+# --- PAGE 1: INTERACTIVE CARDS ---
 if menu == "Genel Bakış (Kartlar)":
-    st.header("🐶🐱 Evcil Hayvanlarım")
+    st.header("🐶🐱 Evcil Hayvan Profilleri")
+    st.caption("Detayları ve geçmişi görmek için karta tıklayın.")
     
     if not df.empty:
-        # Sort by Date
+        # Process Dates
         if "Sonraki Tarih" in df.columns:
             df["Sonraki Tarih"] = pd.to_datetime(df["Sonraki Tarih"], format="%Y-%m-%d", errors='coerce')
             df = df.sort_values(by="Sonraki Tarih")
-        
-        # Create Cards
-        for index, row in df.iterrows():
-            pet_type = "🐶" if "Köpek" in str(row.get("Pet İsmi", "")) else "🐱" if "Kedi" in str(row.get("Pet İsmi", "")) else "🐾"
+
+        # Get Unique Pets
+        pet_names = df["Pet İsmi"].unique()
+
+        for pet in pet_names:
+            # Filter data for this specific pet
+            pet_df = df[df["Pet İsmi"] == pet]
             
-            # Card Container
-            with st.container(border=True):
-                c1, c2 = st.columns([2, 1])
-                with c1:
-                    st.subheader(f"{pet_type} {row['Pet İsmi']}")
-                    st.write(f"**İşlem:** {row['Aşı Tipi']}")
-                    st.caption(f"Kilo: {row['Kilo (kg)']} kg")
-                with c2:
-                    due_date = row['Sonraki Tarih']
-                    if pd.notnull(due_date):
-                        days_left = (due_date.date() - date.today()).days
-                        date_str = due_date.strftime('%d.%m.%Y')
-                        
-                        if days_left < 7:
-                            st.error(f"{days_left} Gün!")
-                            st.caption(date_str)
-                        elif days_left < 30:
-                            st.warning(f"{days_left} Gün")
-                            st.caption(date_str)
-                        else:
-                            st.success(date_str)
+            # Determine Status (Find the closest upcoming date)
+            closest_date = pet_df["Sonraki Tarih"].min()
+            days_left = (closest_date.date() - date.today()).days if pd.notnull(closest_date) else 999
+            
+            # Icon & Color Logic
+            icon = "🐶" if "Köpek" in pet else "🐱" if "Kedi" in pet else "🐾"
+            status_emoji = "✅"
+            status_text = "Durum İyi"
+            
+            if days_left < 7:
+                status_emoji = "🚨"
+                status_text = f"Dikkat! {days_left} gün kaldı"
+            elif days_left < 30:
+                status_emoji = "⚠️"
+                status_text = f"Yaklaşıyor ({days_left} gün)"
+
+            # --- THE CLICKABLE CARD (EXPANDER) ---
+            with st.expander(f"{status_emoji} {icon} {pet}  |  {status_text}"):
+                
+                # Inside the card: Summary Metrics
+                m1, m2, m3 = st.columns(3)
+                latest_weight = pet_df.iloc[-1]["Kilo (kg)"] if "Kilo (kg)" in pet_df.columns else "?"
+                m1.metric("Son Kilo", f"{latest_weight} kg")
+                m2.metric("Sıradaki İşlem", pet_df.iloc[0]["Aşı Tipi"])
+                m3.metric("Tarih", closest_date.strftime('%d.%m.%Y'))
+                
+                st.write("---")
+                st.subheader("📜 Aşı Geçmişi")
+                
+                # Show History Table for this pet only
+                display_df = pet_df[["Aşı Tipi", "Uygulama Tarihi", "Sonraki Tarih"]].copy()
+                # Format dates for display
+                display_df["Uygulama Tarihi"] = pd.to_datetime(display_df["Uygulama Tarihi"]).dt.strftime('%d.%m.%Y')
+                display_df["Sonraki Tarih"] = pd.to_datetime(display_df["Sonraki Tarih"]).dt.strftime('%d.%m.%Y')
+                
+                st.table(display_df)
+
     else:
-        st.info("Henüz kayıt yok.")
+        st.info("Henüz kayıt yok. 'Yeni Kayıt Ekle' menüsünden başlayın.")
 
 # --- PAGE 2: TABLE VIEW (For Deletion) ---
 elif menu == "Düzenle / Sil":
     st.header("📝 Kayıt Yönetimi")
-    st.caption("Silmek istediğiniz satırları seçip alttaki butona basın.")
     
     if not df.empty:
         df["Sil"] = False
@@ -113,15 +151,12 @@ elif menu == "Düzenle / Sil":
             "Pet İsmi": st.column_config.TextColumn("İsim", disabled=True),
             "Aşı Tipi": st.column_config.TextColumn("İşlem", disabled=True),
             "Sonraki Tarih": st.column_config.DateColumn("Tarih", format="DD.MM.YYYY", disabled=True),
-            "Kilo (kg)": st.column_config.NumberColumn("Kg", format="%.1f", disabled=True),
-            "Uygulama Tarihi": st.column_config.DateColumn("Yapıldı", format="DD.MM.YYYY", disabled=True)
         }
 
         edited_df = st.data_editor(df, column_config=column_config, hide_index=True, use_container_width=True)
 
         rows_to_delete = edited_df[edited_df["Sil"] == True]
         if not rows_to_delete.empty:
-            st.write("")
             if st.button(f"🗑️ Seçili {len(rows_to_delete)} Kaydı Sil", type="primary"):
                 indexes_to_keep = edited_df[edited_df["Sil"] == False].index.tolist()
                 try:
@@ -142,7 +177,7 @@ elif menu == "Yeni Kayıt Ekle":
         sel = st.selectbox("Evcil Hayvan", options)
         pet_name = st.text_input("İsim Giriniz") if sel == "➕ Yeni Ekle..." else sel
 
-        # Updated Vaccine List
+        # Updated Vaccine List (Added Lyme & Check-up)
         vaccine = st.selectbox("İşlem Tipi", ["Karma (DHPP)", "Kuduz", "Bronşin", "Lösemi", "Lyme", "İç Parazit", "Dış Parazit", "Check-up"])
         weight = st.number_input("Güncel Kilo (kg)", min_value=0.0, step=0.1, format="%.1f")
 
@@ -161,7 +196,7 @@ elif menu == "Yeni Kayıt Ekle":
             months = 12 if "Yıl" in timing else int(timing.split(" ")[0])
             final_due_date = date_applied + timedelta(days=months*30)
 
-        # THE NOTIFICATION PREVIEW
+        # THE NOTIFICATION PREVIEW (Calculated correctly: Due Date - 7 Days)
         reminder_date = final_due_date - timedelta(days=7)
         st.caption(f"✅ **Aşı Bitiş Tarihi:** {final_due_date.strftime('%d.%m.%Y')}")
         st.info(f"🔔 **Hatırlatma Maili:** {reminder_date.strftime('%d.%m.%Y')} tarihinde gönderilecek.")
