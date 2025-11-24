@@ -7,27 +7,39 @@ from google.oauth2.service_account import Credentials
 # --- CONFIG ---
 st.set_page_config(page_title="PatiLog", page_icon="🐾", layout="wide")
 
-# --- CSS: FORCE HIGH CONTRAST (Fixes the Grey Text Issue) ---
+# --- CSS: FORCE DARK SIDEBAR & HIGH CONTRAST ---
 st.markdown("""
 <style>
-    /* Force main background color */
+    /* 1. Force Main Background */
     .stApp {
         background-color: #0E1117;
     }
-    /* Force all text to be White/Light Grey */
-    h1, h2, h3, h4, h5, h6, p, div, span, label {
+    
+    /* 2. Force Sidebar Background & Text */
+    [data-testid="stSidebar"] {
+        background-color: #262730;
+    }
+    [data-testid="stSidebar"] * {
         color: #FAFAFA !important;
     }
-    /* Fix Input boxes (make them dark with white text) */
+
+    /* 3. Global Text Color Fix */
+    h1, h2, h3, h4, h5, h6, p, div, span, label, li {
+        color: #FAFAFA !important;
+    }
+
+    /* 4. Fix Inputs (Make them Dark with White Text) */
     .stTextInput input, .stSelectbox div, .stNumberInput input, .stDateInput input {
         color: #FAFAFA !important;
-        background-color: #262730 !important;
+        background-color: #41444C !important; /* Slightly lighter grey for inputs */
     }
-    /* Fix Table Headers and Cells */
+    
+    /* 5. Fix Table Headers */
     div[data-testid="stDataFrame"] {
         background-color: #262730;
     }
-    /* Card/Expander Styling */
+    
+    /* 6. Card/Expander Styling */
     .streamlit-expanderHeader {
         background-color: #262730;
         color: white;
@@ -78,10 +90,10 @@ st.sidebar.title("🐾 PatiLog")
 menu = st.sidebar.radio("Menü", ["Genel Bakış (Kartlar)", "Düzenle / Sil", "Yeni Kayıt Ekle"])
 df = load_data()
 
-# --- PAGE 1: INTERACTIVE CARDS ---
+# --- PAGE 1: INTERACTIVE CARDS & CHARTS ---
 if menu == "Genel Bakış (Kartlar)":
     st.header("🐶🐱 Evcil Hayvan Profilleri")
-    st.caption("Detayları ve geçmişi görmek için karta tıklayın.")
+    st.caption("Detayları, kilo geçmişini ve aşıları görmek için karta tıklayın.")
     
     if not df.empty:
         # Process Dates
@@ -96,11 +108,10 @@ if menu == "Genel Bakış (Kartlar)":
             # Filter data for this specific pet
             pet_df = df[df["Pet İsmi"] == pet]
             
-            # Determine Status (Find the closest upcoming date)
+            # Determine Status
             closest_date = pet_df["Sonraki Tarih"].min()
             days_left = (closest_date.date() - date.today()).days if pd.notnull(closest_date) else 999
             
-            # Icon & Color Logic
             icon = "🐶" if "Köpek" in pet else "🐱" if "Kedi" in pet else "🐾"
             status_emoji = "✅"
             status_text = "Durum İyi"
@@ -112,10 +123,10 @@ if menu == "Genel Bakış (Kartlar)":
                 status_emoji = "⚠️"
                 status_text = f"Yaklaşıyor ({days_left} gün)"
 
-            # --- THE CLICKABLE CARD (EXPANDER) ---
+            # --- CARD START ---
             with st.expander(f"{status_emoji} {icon} {pet}  |  {status_text}"):
                 
-                # Inside the card: Summary Metrics
+                # Metrics
                 m1, m2, m3 = st.columns(3)
                 latest_weight = pet_df.iloc[-1]["Kilo (kg)"] if "Kilo (kg)" in pet_df.columns else "?"
                 m1.metric("Son Kilo", f"{latest_weight} kg")
@@ -123,15 +134,28 @@ if menu == "Genel Bakış (Kartlar)":
                 m3.metric("Tarih", closest_date.strftime('%d.%m.%Y'))
                 
                 st.write("---")
+                
+                # --- NEW: WEIGHT HISTORY CHART ---
+                st.subheader("📉 Kilo Geçmişi")
+                if "Kilo (kg)" in pet_df.columns and "Uygulama Tarihi" in pet_df.columns:
+                    chart_data = pet_df[["Uygulama Tarihi", "Kilo (kg)"]].copy()
+                    # Convert to datetime for plotting
+                    chart_data["Uygulama Tarihi"] = pd.to_datetime(chart_data["Uygulama Tarihi"], errors='coerce')
+                    chart_data = chart_data.dropna()
+                    chart_data = chart_data.set_index("Uygulama Tarihi").sort_index()
+                    
+                    st.line_chart(chart_data)
+
+                st.write("---")
                 st.subheader("📜 Aşı Geçmişi")
                 
-                # Show History Table for this pet only
+                # History Table
                 display_df = pet_df[["Aşı Tipi", "Uygulama Tarihi", "Sonraki Tarih"]].copy()
-                # Format dates for display
                 display_df["Uygulama Tarihi"] = pd.to_datetime(display_df["Uygulama Tarihi"]).dt.strftime('%d.%m.%Y')
                 display_df["Sonraki Tarih"] = pd.to_datetime(display_df["Sonraki Tarih"]).dt.strftime('%d.%m.%Y')
                 
                 st.table(display_df)
+            # --- CARD END ---
 
     else:
         st.info("Henüz kayıt yok. 'Yeni Kayıt Ekle' menüsünden başlayın.")
@@ -177,7 +201,6 @@ elif menu == "Yeni Kayıt Ekle":
         sel = st.selectbox("Evcil Hayvan", options)
         pet_name = st.text_input("İsim Giriniz") if sel == "➕ Yeni Ekle..." else sel
 
-        # Updated Vaccine List (Added Lyme & Check-up)
         vaccine = st.selectbox("İşlem Tipi", ["Karma (DHPP)", "Kuduz", "Bronşin", "Lösemi", "Lyme", "İç Parazit", "Dış Parazit", "Check-up"])
         weight = st.number_input("Güncel Kilo (kg)", min_value=0.0, step=0.1, format="%.1f")
 
@@ -196,7 +219,6 @@ elif menu == "Yeni Kayıt Ekle":
             months = 12 if "Yıl" in timing else int(timing.split(" ")[0])
             final_due_date = date_applied + timedelta(days=months*30)
 
-        # THE NOTIFICATION PREVIEW (Calculated correctly: Due Date - 7 Days)
         reminder_date = final_due_date - timedelta(days=7)
         st.caption(f"✅ **Aşı Bitiş Tarihi:** {final_due_date.strftime('%d.%m.%Y')}")
         st.info(f"🔔 **Hatırlatma Maili:** {reminder_date.strftime('%d.%m.%Y')} tarihinde gönderilecek.")
