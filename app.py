@@ -8,7 +8,7 @@ from google.oauth2.service_account import Credentials
 # --- CONFIG ---
 st.set_page_config(page_title="PatiLog", page_icon="🐾", layout="wide")
 
-# --- THE "NUKE" CSS FIX ---
+# --- THE "NUKE" CSS FIX (Fixes White Dropdowns & Styling) ---
 st.markdown("""
 <style>
     /* 1. FORCE DARK BACKGROUND EVERYWHERE */
@@ -52,7 +52,7 @@ st.markdown("""
         border: 1px solid #4C4C4C;
     }
     .streamlit-expanderHeader:hover {
-        background-color: #363945 !important; /* Slightly lighter on hover */
+        background-color: #363945 !important;
         color: #FF4B4B !important;
     }
     div[data-testid="stExpander"] {
@@ -142,5 +142,120 @@ if menu == "Genel Bakış (Kartlar)":
                 latest_weight = pet_df.iloc[-1]["Kilo (kg)"] if "Kilo (kg)" in pet_df.columns else "?"
                 m1.metric("Son Kilo", f"{latest_weight} kg")
                 m2.metric("Sıradaki İşlem", pet_df.iloc[0]["Aşı Tipi"])
-                m3.metric("Tarih", closest_
+                m3.metric("Tarih", closest_date.strftime('%d.%m.%Y'))
+                
+                st.write("---")
+                
+                # --- PRO CHART (Altair) ---
+                if "Kilo (kg)" in pet_df.columns and "Uygulama Tarihi" in pet_df.columns:
+                    st.caption("📉 Kilo Değişimi")
+                    chart_data = pet_df[["Uygulama Tarihi", "Kilo (kg)"]].copy()
+                    chart_data["Uygulama Tarihi"] = pd.to_datetime(chart_data["Uygulama Tarihi"], errors='coerce')
+                    chart_data = chart_data.dropna().sort_values("Uygulama Tarihi")
+                    
+                    if not chart_data.empty:
+                        # 1. The Area (Gradient)
+                        area = alt.Chart(chart_data).mark_area(
+                            interpolate='monotone', # Smooth curve
+                            fillOpacity=0.3,
+                            line={'color':'#FF4B4B'}
+                        ).encode(
+                            x=alt.X('Uygulama Tarihi', axis=alt.Axis(format='%d.%m', title=None, labelColor='white', grid=False)),
+                            y=alt.Y('Kilo (kg)', scale=alt.Scale(zero=False, padding=1), axis=alt.Axis(title=None, labelColor='white', grid=False))
+                        )
+                        
+                        # 2. The Line (Sharp edge)
+                        line = alt.Chart(chart_data).mark_line(
+                            interpolate='monotone',
+                            color='#FF4B4B'
+                        ).encode(
+                            x='Uygulama Tarihi',
+                            y='Kilo (kg)'
+                        )
+
+                        # 3. The Dots (Interactive)
+                        points = alt.Chart(chart_data).mark_circle(size=80, color='white').encode(
+                            x='Uygulama Tarihi',
+                            y='Kilo (kg)',
+                            tooltip=[alt.Tooltip('Uygulama Tarihi', format='%d.%m.%Y'), 'Kilo (kg)']
+                        )
+
+                        final_chart = (area + line + points).properties(height=250).configure_view(strokeWidth=0)
+                        st.altair_chart(final_chart, use_container_width=True)
+
+                st.write("---")
+                st.caption("📜 Geçmiş İşlemler")
+                display_df = pet_df[["Aşı Tipi", "Uygulama Tarihi", "Sonraki Tarih"]].copy()
+                display_df["Uygulama Tarihi"] = pd.to_datetime(display_df["Uygulama Tarihi"]).dt.strftime('%d.%m.%Y')
+                display_df["Sonraki Tarih"] = pd.to_datetime(display_df["Sonraki Tarih"]).dt.strftime('%d.%m.%Y')
+                st.table(display_df)
+
+    else:
+        st.info("Kayıt yok.")
+
+# --- PAGE 2: DELETE ---
+elif menu == "Düzenle / Sil":
+    st.header("📝 Kayıt Yönetimi")
+    if not df.empty:
+        df["Sil"] = False
+        if "Sonraki Tarih" in df.columns:
+            df["Sonraki Tarih"] = pd.to_datetime(df["Sonraki Tarih"], format="%Y-%m-%d", errors='coerce')
+            df = df.sort_values(by="Sonraki Tarih")
+
+        column_config = {
+            "Sil": st.column_config.CheckboxColumn("Sil?", default=False, width="small"),
+            "Pet İsmi": st.column_config.TextColumn("İsim", disabled=True),
+            "Sonraki Tarih": st.column_config.DateColumn("Tarih", format="DD.MM.YYYY", disabled=True),
+        }
+        edited_df = st.data_editor(df, column_config=column_config, hide_index=True, use_container_width=True)
+        rows_to_delete = edited_df[edited_df["Sil"] == True]
+        if not rows_to_delete.empty:
+            if st.button(f"🗑️ Seçili {len(rows_to_delete)} Kaydı Sil", type="primary"):
+                indexes_to_keep = edited_df[edited_df["Sil"] == False].index.tolist()
+                try:
+                    delete_rows(indexes_to_keep)
+                    st.success("Silindi!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Hata: {e}")
+
+# --- PAGE 3: NEW ENTRY ---
+elif menu == "Yeni Kayıt Ekle":
+    st.header("💉 Yeni Giriş")
+    col1, col2 = st.columns(2)
+    with col1:
+        existing_names = [x for x in df["Pet İsmi"].unique() if str(x).strip() != ""] if not df.empty else []
+        options = existing_names + ["➕ Yeni Ekle..."]
+        sel = st.selectbox("Evcil Hayvan", options)
+        pet_name = st.text_input("İsim Giriniz") if sel == "➕ Yeni Ekle..." else sel
+
+        vaccine = st.selectbox("İşlem Tipi", ["Karma (DHPP)", "Kuduz", "Bronşin", "Lösemi", "Lyme", "İç Parazit", "Dış Parazit", "Check-up"])
+        weight = st.number_input("Güncel Kilo (kg)", min_value=0.0, step=0.1, format="%.1f")
+
+    with col2:
+        date_applied = st.date_input("Uygulama Tarihi", date.today())
+        st.write("---")
+        st.write("📅 **Geçerlilik Süresi**")
+        timing = st.selectbox("Süre Seçimi", ["1 Ay", "2 Ay", "3 Ay", "6 Ay", "1 Yıl", "Manuel Tarih"])
+        
+        final_due_date = None
+        if timing == "Manuel Tarih":
+            final_due_date = st.date_input("Bitiş Tarihi", min_value=date_applied)
+        else:
+            months = 12 if "Yıl" in timing else int(timing.split(" ")[0])
+            final_due_date = date_applied + timedelta(days=months*30)
+
+        reminder_date = final_due_date - timedelta(days=7)
+        st.caption(f"✅ **Aşı Bitiş Tarihi:** {final_due_date.strftime('%d.%m.%Y')}")
+        st.info(f"🔔 **Hatırlatma Maili:** {reminder_date.strftime('%d.%m.%Y')} tarihinde gönderilecek.")
+
+    st.write("")
+    if st.button("Kaydet", type="primary", use_container_width=True):
+        if pet_name:
+            save_entry(pet_name, vaccine, date_applied, final_due_date, weight)
+            st.success("Kaydedildi!")
+            st.rerun()
+        else:
+            st.warning("İsim giriniz.")
+
 
