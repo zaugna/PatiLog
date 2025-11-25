@@ -1,0 +1,30 @@
+name: Daily Vaccine Check
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # Runs at 06:00 UTC (which is 09:00 AM Istanbul Time)
+  workflow_dispatch: # Allows you to run it manually to test
+
+jobs:
+  run-checker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+
+      - name: Install libraries
+        run: |
+          pip install pandas gspread google-auth
+
+      - name: Run Notifier Script
+        env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python notifier.py
