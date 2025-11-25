@@ -11,7 +11,11 @@ import json
 # 1. Connect to Database
 json_creds = os.environ["GCP_CREDENTIALS"] # We will store this in GitHub Secrets
 creds_dict = json.loads(json_creds)
-scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+scopes = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
 creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
 client = gspread.authorize(creds)
 sheet = client.open("PatiLog_DB").sheet1
