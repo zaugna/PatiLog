@@ -26,7 +26,7 @@ df = pd.DataFrame(data)
 # Email Settings
 SENDER_EMAIL = os.environ["EMAIL_USER"]
 SENDER_PASSWORD = os.environ["EMAIL_PASS"]
-RECEIVER_EMAILS_LIST = os.environ["EMAIL_TO"].split(",") 
+RECEIVER_EMAILS = os.environ["EMAIL_TO"].split(",") 
 
 # --- HELPER: CLEAN TEXT ---
 def clean_text(text):
@@ -47,9 +47,9 @@ def create_gcal_link(title, date_obj):
     }
     return base_url + "&" + urllib.parse.urlencode(params)
 
-# --- HELPER: SEND INVITATION ---
-def send_invitation_email(pet, vaccine, due_date_obj, days_left):
-    print(f"Preparing Invitation for: {pet} - {vaccine}...")
+# --- HELPER: SEND FILE ---
+def send_file_email(pet, vaccine, due_date_obj, days_left):
+    print(f"Preparing File for: {pet} - {vaccine}...")
     
     event_title = f"{pet} - {vaccine}"
     due_date_str = due_date_obj.strftime("%d.%m.%Y")
@@ -62,12 +62,13 @@ def send_invitation_email(pet, vaccine, due_date_obj, days_left):
     <p><strong>{pet}</strong> için <strong>{vaccine}</strong> zamanı geldi.</p>
     <ul>
         <li>Tarih: {due_date_str}</li>
-        <li>Saat: 09:00</li>
+        <li>Kalan Gün: {days_left}</li>
     </ul>
     <p><a href="{gcal_link}">Google Takvime Ekle</a></p>
+    <p>iOS: Ekteki dosyaya tıklayıp "Add to Calendar" diyebilirsiniz.</p>
     """
 
-    # 2. Build The Invitation (Method: REQUEST)
+    # 2. Build The "Dumb" ICS File (METHOD:PUBLISH)
     dt_start = due_date_obj.strftime("%Y%m%dT090000")
     dt_end = due_date_obj.strftime("%Y%m%dT091500")
     now_str = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
@@ -79,51 +80,42 @@ def send_invitation_email(pet, vaccine, due_date_obj, days_left):
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
         "PRODID:-//PatiLog//Vaccine Check//TR",
-        "METHOD:REQUEST", # <--- CHANGE 1: Request = Invitation
+        "METHOD:PUBLISH", # PUBLISH = Snapshot (Not an invite)
         "BEGIN:VEVENT",
         f"UID:{unique_id}",
         f"DTSTAMP:{now_str}",
         f"DTSTART:{dt_start}",
         f"DTEND:{dt_end}",
         f"SUMMARY:{event_title}",
-        f"ORGANIZER;CN=PatiLog Bot:mailto:{SENDER_EMAIL}", # <--- CHANGE 2: Organizer is required
-    ]
-    
-    # Add all receivers as attendees so the phone knows "This is for me"
-    for email in RECEIVER_EMAILS_LIST:
-        clean_email = email.strip()
-        ics_content.append(f"ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=FALSE;CN=Owner:mailto:{clean_email}")
-
-    ics_content.extend([
-        "DESCRIPTION:PatiLog Aşı Hatırlatması",
         "STATUS:CONFIRMED",
         "TRANSP:OPAQUE",
         "END:VEVENT",
         "END:VCALENDAR"
-    ])
+    ]
+    # Removed DESCRIPTION to keep it clean (as you requested)
     
     ics_text = "\r\n".join(ics_content)
 
-    # 3. Construct Email
-    msg = MIMEMultipart('alternative') # <--- CHANGE 3: Alternative means "The calendar IS the email"
-    msg['Subject'] = f"{urgency} {pet}: {vaccine} (Davet)"
+    # 3. Construct Email (Multipart/Mixed = Body + Attachment)
+    msg = MIMEMultipart('mixed') 
+    msg['Subject'] = f"{urgency} {pet}: {vaccine} Hatırlatması"
     msg['From'] = SENDER_EMAIL
-    msg['To'] = ", ".join(RECEIVER_EMAILS_LIST)
+    msg['To'] = ", ".join(RECEIVER_EMAILS)
 
     # Part 1: HTML
     msg.attach(MIMEText(html_body, 'html'))
 
-    # Part 2: Calendar
-    # We use 'text/calendar' with method=REQUEST so mail clients render buttons
-    ical_atch = MIMEText(ics_text, 'calendar; method=REQUEST', 'utf-8')
-    ical_atch.add_header('Content-Class', 'urn:content-classes:calendarmessage')
-    msg.attach(ical_atch)
+    # Part 2: The Attachment (Pure File)
+    # We purposefully remove "content-class" and "inline" to force it to behave like a file
+    attachment = MIMEText(ics_text, 'calendar; method=PUBLISH', 'utf-8')
+    attachment.add_header('Content-Disposition', 'attachment', filename='reminder.ics')
+    msg.attach(attachment)
 
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.sendmail(SENDER_EMAIL, RECEIVER_EMAILS_LIST, msg.as_string())
-        print(f"✅ Sent invitation for {pet} - {vaccine}")
+            server.sendmail(SENDER_EMAIL, RECEIVER_EMAILS, msg.as_string())
+        print(f"✅ Sent file for {pet} - {vaccine}")
     except Exception as e:
         print(f"❌ Failed to send for {pet}: {e}")
 
@@ -145,7 +137,7 @@ if not df.empty and "Sonraki Tarih" in df.columns:
             if 0 <= days_left <= 7:
                 pet = clean_text(row["Pet İsmi"])
                 vaccine = clean_text(row["Aşı Tipi"])
-                send_invitation_email(pet, vaccine, due_date_obj, days_left)
+                send_file_email(pet, vaccine, due_date_obj, days_left)
                 
         except Exception as e:
             print(f"Skipping row: {e}")
