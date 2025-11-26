@@ -5,8 +5,6 @@ from google.oauth2.service_account import Credentials
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
 import os
 import json
 import urllib.parse
@@ -32,7 +30,6 @@ RECEIVER_EMAILS = os.environ["EMAIL_TO"].split(",")
 # --- HELPER: CLEAN TEXT ---
 def clean_text(text):
     if not text: return ""
-    # Remove dangerous characters for ICS
     return str(text).replace("\n", " ").replace("\r", " ").replace(";", "").replace(",", " ")
 
 # --- HELPER: GOOGLE LINK ---
@@ -56,12 +53,12 @@ print(f"--- Running PatiLog Check for {today} ---")
 email_html_content = "<h3>🐾 PatiLog Aşı Hatırlatması</h3><ul>"
 alerts_found = False
 
-# ICS HEADER (Strict RFC 5545 Compliance)
+# ICS HEADER
 ics_lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
     "PRODID:-//PatiLog//Vaccine Check//TR",
-    "METHOD:PUBLISH",
+    "METHOD:PUBLISH", # Vital for iOS to see this as an invite/event
     "CALSCALE:GREGORIAN"
 ]
 
@@ -116,40 +113,32 @@ if not df.empty and "Sonraki Tarih" in df.columns:
             print(f"Skipping row: {e}")
 
 ics_lines.append("END:VCALENDAR")
-
-# CRITICAL FIX 1: Join with CRLF (\r\n) strictly
 ics_full_text = "\r\n".join(ics_lines)
 
 email_html_content += "</ul>"
 
-# --- SEND EMAIL (iOS Optimized Structure) ---
+# --- SEND EMAIL (PLAIN TEXT ATTACHMENT STRATEGY) ---
 if alerts_found:
-    print("Sending email with iOS-Optimized Inline Calendar...")
+    print("Sending email with PlainText UTF-8 attachment...")
     
-    msg = MIMEMultipart('mixed') # 'mixed' allows attachments + inline
+    msg = MIMEMultipart()
     msg['Subject'] = "🔔 PatiLog: Aşı Hatırlatması"
     msg['From'] = SENDER_EMAIL
     msg['To'] = ", ".join(RECEIVER_EMAILS)
-    
-    # CRITICAL FIX 2: Set Content-Class on the main header
     msg.add_header('Content-Class', 'urn:content-classes:calendarmessage')
-
-    # Part 1: The HTML Body
+    
+    # 1. HTML Body
     msg.attach(MIMEText(email_html_content, 'html'))
     
-    # Part 2: The Calendar File
-    # CRITICAL FIX 3: Use 'inline' disposition so iOS renders it immediately
-    part = MIMEBase('text', 'calendar', method='PUBLISH', name='patilog.ics')
-    part.set_payload(ics_full_text.encode('utf-8'))
-    encoders.encode_base64(part)
+    # 2. THE CALENDAR FIX
+    # We use MIMEText (not MIMEBase). This avoids Base64 encoding.
+    # This sends the ICS as readable text, which iOS prefers.
+    ics_attachment = MIMEText(ics_full_text, 'calendar; method=PUBLISH', 'utf-8')
     
-    part.add_header('Content-Description', 'patilog.ics')
-    part.add_header('Content-Class', 'urn:content-classes:calendarmessage')
-    part.add_header('Content-Type', 'text/calendar; charset="utf-8"; method=PUBLISH')
-    # 'inline' forces the calendar UI to appear inside the mail app
-    part.add_header('Content-Disposition', 'inline; filename="patilog.ics"')
+    ics_attachment.add_header('Content-Disposition', 'attachment; filename="patilog.ics"')
+    ics_attachment.add_header('Content-Class', 'urn:content-classes:calendarmessage')
     
-    msg.attach(part)
+    msg.attach(ics_attachment)
 
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
