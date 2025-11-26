@@ -5,6 +5,8 @@ from google.oauth2.service_account import Credentials
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 import os
 import json
 import urllib.parse
@@ -27,13 +29,13 @@ SENDER_EMAIL = os.environ["EMAIL_USER"]
 SENDER_PASSWORD = os.environ["EMAIL_PASS"]
 RECEIVER_EMAILS = os.environ["EMAIL_TO"].split(",") 
 
-# --- HELPER: CLEAN TEXT FOR ICS ---
+# --- HELPER: CLEAN TEXT ---
 def clean_text(text):
-    # ICS format breaks if there are newlines in the summary
     if not text: return ""
-    return str(text).replace("\n", " ").replace("\r", " ").strip()
+    # Remove dangerous characters for ICS
+    return str(text).replace("\n", " ").replace("\r", " ").replace(";", "").replace(",", " ")
 
-# --- HELPER: GOOGLE CALENDAR LINK ---
+# --- HELPER: GOOGLE LINK ---
 def create_gcal_link(title, date_obj):
     date_str = date_obj.strftime("%Y%m%d")
     next_day_str = (date_obj + timedelta(days=1)).strftime("%Y%m%d")
@@ -54,7 +56,7 @@ print(f"--- Running PatiLog Check for {today} ---")
 email_html_content = "<h3>🐾 PatiLog Aşı Hatırlatması</h3><ul>"
 alerts_found = False
 
-# ICS HEADER (Standardized)
+# ICS HEADER (Strict RFC 5545 Compliance)
 ics_lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
@@ -74,75 +76,8 @@ if not df.empty and "Sonraki Tarih" in df.columns:
 
             days_left = (due_date - today).days
             
-            # Logic: Alert if within next 7 days
             if 0 <= days_left <= 7:
                 alerts_found = True
                 pet = clean_text(row["Pet İsmi"])
                 vaccine = clean_text(row["Aşı Tipi"])
-                event_title = f"{pet} - {vaccine}"
-                
-                # 1. Google Link
-                gcal_link = create_gcal_link(event_title, due_date)
-                
-                # 2. Add to ICS
-                dt_start = due_date.strftime("%Y%m%d")
-                dt_end = (due_date + timedelta(days=1)).strftime("%Y%m%d")
-                now_str = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-                unique_id = str(uuid.uuid4())
-                
-                ics_lines.append("BEGIN:VEVENT")
-                ics_lines.append(f"UID:{unique_id}")
-                ics_lines.append(f"DTSTAMP:{now_str}")
-                ics_lines.append(f"DTSTART;VALUE=DATE:{dt_start}")
-                ics_lines.append(f"DTEND;VALUE=DATE:{dt_end}")
-                ics_lines.append(f"SUMMARY:{event_title}")
-                ics_lines.append("DESCRIPTION:PatiLog Aşı Hatırlatması")
-                ics_lines.append("STATUS:CONFIRMED")
-                ics_lines.append("TRANSP:TRANSPARENT")
-                ics_lines.append("END:VEVENT")
-                
-                urgency = "⚠️" if days_left > 3 else "🚨"
-                email_html_content += f"""
-                <li style="margin-bottom: 15px;">
-                    <strong>{urgency} {pet} - {vaccine}</strong><br>
-                    Tarih: {due_date_str}<br>
-                    <a href="{gcal_link}">Google Takvime Ekle</a>
-                </li>
-                """
-                print(f"Alert: {pet} - {vaccine}")
-                
-        except Exception as e:
-            print(f"Skipping row: {e}")
-
-# Close ICS
-ics_lines.append("END:VCALENDAR")
-ics_full_text = "\r\n".join(ics_lines)
-
-email_html_content += "</ul><p><small>iOS: Ekteki dosyaya tıklayıp takvime ekleyebilirsiniz.</small></p>"
-
-# --- SEND EMAIL (MULTIPART) ---
-if alerts_found:
-    print("Sending email with PlainText UTF-8 attachment...")
-    
-    msg = MIMEMultipart()
-    msg['Subject'] = "🔔 PatiLog: Aşı Hatırlatması"
-    msg['From'] = SENDER_EMAIL
-    msg['To'] = ", ".join(RECEIVER_EMAILS)
-    
-    msg.attach(MIMEText(email_html_content, 'html'))
-    
-    # ATTACHMENT HANDLING - THE FIX
-    # We use MIMEText instead of MIMEBase to handle the UTF-8 encoding automatically
-    attachment = MIMEText(ics_full_text, 'calendar', 'utf-8')
-    attachment.add_header('Content-Disposition', 'attachment', filename='patilog.ics')
-    msg.attach(attachment)
-
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.sendmail(SENDER_EMAIL, RECEIVER_EMAILS, msg.as_string())
-        print("✅ Email sent successfully!")
-    except Exception as e:
-        print(f"❌ Failed to send email: {e}")
-else:
-    print("No vaccines due.")
+                event_title = f"{pet
