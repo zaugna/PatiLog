@@ -4,12 +4,13 @@ import gspread
 from google.oauth2.service_account import Credentials
 import smtplib
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart # <--- NEW: For attachments
-from email.mime.base import MIMEBase # <--- NEW: For file handling
-from email import encoders # <--- NEW: For encoding the file
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 import os
 import json
 import urllib.parse
+import uuid # <--- NEW: To generate unique IDs for events
 
 # --- SETUP ---
 json_creds = os.environ["GCP_CREDENTIALS"]
@@ -49,11 +50,13 @@ print(f"--- Running PatiLog Check for {today} ---")
 email_html_content = "<h3>🐾 PatiLog Aşı Hatırlatması</h3><ul>"
 alerts_found = False
 
-# We will build the ICS file content string line by line
-ics_content = [
+# ICS HEADER (Standardized for iOS)
+ics_lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//PatiLog//Vaccine Check//EN"
+    "PRODID:-//PatiLog//Vaccine Check//TR",
+    "METHOD:PUBLISH", # Tells iOS this is a snapshot of events
+    "CALSCALE:GREGORIAN"
 ]
 
 if not df.empty and "Sonraki Tarih" in df.columns:
@@ -77,16 +80,22 @@ if not df.empty and "Sonraki Tarih" in df.columns:
                 # 1. Google Link
                 gcal_link = create_gcal_link(event_title, due_date)
                 
-                # 2. Add to ICS Content (For Apple/Outlook)
+                # 2. Add to ICS (Formatted for iOS)
                 dt_start = due_date.strftime("%Y%m%d")
                 dt_end = (due_date + timedelta(days=1)).strftime("%Y%m%d")
+                now_str = datetime.now().strftime("%Y%m%dT%H%M%SZ")
+                unique_id = str(uuid.uuid4()) # Unique ID for every event
                 
-                ics_content.append("BEGIN:VEVENT")
-                ics_content.append(f"SUMMARY:{event_title}")
-                ics_content.append(f"DTSTART;VALUE=DATE:{dt_start}")
-                ics_content.append(f"DTEND;VALUE=DATE:{dt_end}")
-                ics_content.append("DESCRIPTION:PatiLog Hatırlatması")
-                ics_content.append("END:VEVENT")
+                ics_lines.append("BEGIN:VEVENT")
+                ics_lines.append(f"UID:{unique_id}")
+                ics_lines.append(f"DTSTAMP:{now_str}")
+                ics_lines.append(f"DTSTART;VALUE=DATE:{dt_start}")
+                ics_lines.append(f"DTEND;VALUE=DATE:{dt_end}")
+                ics_lines.append(f"SUMMARY:{event_title}")
+                ics_lines.append("DESCRIPTION:PatiLog Aşı Hatırlatması")
+                ics_lines.append("STATUS:CONFIRMED")
+                ics_lines.append("TRANSP:TRANSPARENT")
+                ics_lines.append("END:VEVENT")
                 
                 urgency = "⚠️" if days_left > 3 else "🚨"
                 email_html_content += f"""
@@ -101,33 +110,33 @@ if not df.empty and "Sonraki Tarih" in df.columns:
         except Exception as e:
             print(f"Skipping row: {e}")
 
-# Close the ICS file format
-ics_content.append("END:VCALENDAR")
-ics_text = "\n".join(ics_content)
+# Close ICS format
+ics_lines.append("END:VCALENDAR")
+# Join with CRLF (Standard for email attachments)
+ics_full_text = "\r\n".join(ics_lines)
 
-email_html_content += "</ul><p><small>Apple/iOS kullanıcıları ekteki dosyaya tıklayarak takvime ekleyebilir.</small></p>"
+email_html_content += "</ul><p><small>iOS: Ekteki dosyaya tıklayıp 'Hepsini Ekle' diyebilirsiniz.</small></p>"
 
-# --- SEND EMAIL (MULTIPART) ---
+# --- SEND EMAIL ---
 if alerts_found:
-    print("Sending email with attachment...")
+    print("Sending email with UTF-8 attachment...")
     
-    # Create the complex email object
     msg = MIMEMultipart()
     msg['Subject'] = "🔔 PatiLog: Aşı Hatırlatması"
     msg['From'] = SENDER_EMAIL
     msg['To'] = ", ".join(RECEIVER_EMAILS)
     
-    # Attach the HTML body
     msg.attach(MIMEText(email_html_content, 'html'))
     
-    # Create the Attachment
-    part = MIMEBase('text', 'calendar')
-    part.set_payload(ics_text)
+    # ATTACHMENT HANDLING (Fixed for Turkish Characters)
+    part = MIMEBase('text', 'calendar', method='PUBLISH', name='patilog.ics')
+    # CRITICAL FIX: Encode to UTF-8 before attaching
+    part.set_payload(ics_full_text.encode('utf-8'))
     encoders.encode_base64(part)
-    part.add_header(
-        'Content-Disposition',
-        f'attachment; filename=patilog_takvim.ics',
-    )
+    
+    part.add_header('Content-Disposition', 'attachment; filename="patilog.ics"')
+    part.add_header('Content-Type', 'text/calendar; charset="utf-8"; method=PUBLISH')
+    
     msg.attach(part)
 
     try:
