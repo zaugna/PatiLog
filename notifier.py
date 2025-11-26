@@ -80,4 +80,83 @@ if not df.empty and "Sonraki Tarih" in df.columns:
                 alerts_found = True
                 pet = clean_text(row["Pet İsmi"])
                 vaccine = clean_text(row["Aşı Tipi"])
-                event_title = f"{pet
+                event_title = f"{pet} - {vaccine}"
+                
+                # Links
+                gcal_link = create_gcal_link(event_title, due_date)
+                
+                # ICS Event Construction
+                dt_start = due_date.strftime("%Y%m%d")
+                dt_end = (due_date + timedelta(days=1)).strftime("%Y%m%d")
+                now_str = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+                unique_id = str(uuid.uuid4()) + "@patilog"
+                
+                ics_lines.append("BEGIN:VEVENT")
+                ics_lines.append(f"DTSTART;VALUE=DATE:{dt_start}")
+                ics_lines.append(f"DTEND;VALUE=DATE:{dt_end}")
+                ics_lines.append(f"DTSTAMP:{now_str}")
+                ics_lines.append(f"UID:{unique_id}")
+                ics_lines.append(f"SUMMARY:{event_title}")
+                ics_lines.append("DESCRIPTION:PatiLog Aşı Hatırlatması")
+                ics_lines.append("STATUS:CONFIRMED")
+                ics_lines.append("TRANSP:TRANSPARENT")
+                ics_lines.append("END:VEVENT")
+                
+                urgency = "⚠️" if days_left > 3 else "🚨"
+                email_html_content += f"""
+                <li style="margin-bottom: 15px;">
+                    <strong>{urgency} {pet} - {vaccine}</strong><br>
+                    Tarih: {due_date_str}<br>
+                    <a href="{gcal_link}">Google Takvime Ekle</a>
+                </li>
+                """
+                print(f"Alert: {pet} - {vaccine}")
+                
+        except Exception as e:
+            print(f"Skipping row: {e}")
+
+ics_lines.append("END:VCALENDAR")
+
+# CRITICAL FIX 1: Join with CRLF (\r\n) strictly
+ics_full_text = "\r\n".join(ics_lines)
+
+email_html_content += "</ul>"
+
+# --- SEND EMAIL (iOS Optimized Structure) ---
+if alerts_found:
+    print("Sending email with iOS-Optimized Inline Calendar...")
+    
+    msg = MIMEMultipart('mixed') # 'mixed' allows attachments + inline
+    msg['Subject'] = "🔔 PatiLog: Aşı Hatırlatması"
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = ", ".join(RECEIVER_EMAILS)
+    
+    # CRITICAL FIX 2: Set Content-Class on the main header
+    msg.add_header('Content-Class', 'urn:content-classes:calendarmessage')
+
+    # Part 1: The HTML Body
+    msg.attach(MIMEText(email_html_content, 'html'))
+    
+    # Part 2: The Calendar File
+    # CRITICAL FIX 3: Use 'inline' disposition so iOS renders it immediately
+    part = MIMEBase('text', 'calendar', method='PUBLISH', name='patilog.ics')
+    part.set_payload(ics_full_text.encode('utf-8'))
+    encoders.encode_base64(part)
+    
+    part.add_header('Content-Description', 'patilog.ics')
+    part.add_header('Content-Class', 'urn:content-classes:calendarmessage')
+    part.add_header('Content-Type', 'text/calendar; charset="utf-8"; method=PUBLISH')
+    # 'inline' forces the calendar UI to appear inside the mail app
+    part.add_header('Content-Disposition', 'inline; filename="patilog.ics"')
+    
+    msg.attach(part)
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.sendmail(SENDER_EMAIL, RECEIVER_EMAILS, msg.as_string())
+        print("✅ Email sent successfully!")
+    except Exception as e:
+        print(f"❌ Failed to send email: {e}")
+else:
+    print("No vaccines due.")
