@@ -2,7 +2,8 @@ name: Daily Vaccine Check
 
 on:
   schedule:
-    - cron: '0 6 * * *' # Runs at 06:00 UTC (which is 09:00 AM Istanbul Time)
+    # Runs at 05:45 UTC (08:45 AM Istanbul Time) to avoid traffic jams
+    - cron: '45 5 * * *'
   workflow_dispatch: # Allows you to run it manually to test
 
 jobs:
