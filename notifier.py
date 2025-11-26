@@ -4,9 +4,12 @@ import gspread
 from google.oauth2.service_account import Credentials
 import smtplib
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart # <--- NEW: For attachments
+from email.mime.base import MIMEBase # <--- NEW: For file handling
+from email import encoders # <--- NEW: For encoding the file
 import os
 import json
-import urllib.parse # <--- NEW: For creating safe URLs
+import urllib.parse
 
 # --- SETUP ---
 json_creds = os.environ["GCP_CREDENTIALS"]
@@ -25,18 +28,15 @@ SENDER_EMAIL = os.environ["EMAIL_USER"]
 SENDER_PASSWORD = os.environ["EMAIL_PASS"]
 RECEIVER_EMAILS = os.environ["EMAIL_TO"].split(",") 
 
-# --- HELPER: GENERATE GOOGLE CALENDAR LINK ---
+# --- HELPER: GOOGLE CALENDAR LINK ---
 def create_gcal_link(title, date_obj):
-    # Google Calendar expects dates in YYYYMMDD format
     date_str = date_obj.strftime("%Y%m%d")
-    # Events need a start and end date (we make it an all-day event by using the same day + 1)
     next_day_str = (date_obj + timedelta(days=1)).strftime("%Y%m%d")
-    
     base_url = "https://www.google.com/calendar/render?action=TEMPLATE"
     params = {
         "text": title,
         "dates": f"{date_str}/{next_day_str}",
-        "details": "Hatırlatma: PatiLog Evcil Hayvan Takip Sistemi",
+        "details": "Hatırlatma: PatiLog",
         "sf": "true",
         "output": "xml"
     }
@@ -46,9 +46,15 @@ def create_gcal_link(title, date_obj):
 today = date.today()
 print(f"--- Running PatiLog Check for {today} ---")
 
-# We will build an HTML email now (to support clickable links)
 email_html_content = "<h3>🐾 PatiLog Aşı Hatırlatması</h3><ul>"
 alerts_found = False
+
+# We will build the ICS file content string line by line
+ics_content = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//PatiLog//Vaccine Check//EN"
+]
 
 if not df.empty and "Sonraki Tarih" in df.columns:
     for index, row in df.iterrows():
@@ -66,19 +72,28 @@ if not df.empty and "Sonraki Tarih" in df.columns:
                 alerts_found = True
                 pet = row["Pet İsmi"]
                 vaccine = row["Aşı Tipi"]
+                event_title = f"{pet} - {vaccine}"
                 
-                # Create the Magic Link
-                event_title = f"{pet} - {vaccine} Aşısı"
+                # 1. Google Link
                 gcal_link = create_gcal_link(event_title, due_date)
                 
-                urgency = "⚠️" if days_left > 3 else "🚨"
+                # 2. Add to ICS Content (For Apple/Outlook)
+                dt_start = due_date.strftime("%Y%m%d")
+                dt_end = (due_date + timedelta(days=1)).strftime("%Y%m%d")
                 
-                # Add list item to HTML
+                ics_content.append("BEGIN:VEVENT")
+                ics_content.append(f"SUMMARY:{event_title}")
+                ics_content.append(f"DTSTART;VALUE=DATE:{dt_start}")
+                ics_content.append(f"DTEND;VALUE=DATE:{dt_end}")
+                ics_content.append("DESCRIPTION:PatiLog Hatırlatması")
+                ics_content.append("END:VEVENT")
+                
+                urgency = "⚠️" if days_left > 3 else "🚨"
                 email_html_content += f"""
                 <li style="margin-bottom: 15px;">
                     <strong>{urgency} {pet} - {vaccine}</strong><br>
-                    Kalan Süre: {days_left} gün ({due_date_str})<br>
-                    <a href="{gcal_link}" style="background-color: #4285F4; color: white; padding: 5px 10px; text-decoration: none; border-radius: 4px; font-size: 12px;">📅 Takvime Ekle</a>
+                    Tarih: {due_date_str}<br>
+                    <a href="{gcal_link}">Google Takvime Ekle</a>
                 </li>
                 """
                 print(f"Alert: {pet} - {vaccine}")
@@ -86,17 +101,34 @@ if not df.empty and "Sonraki Tarih" in df.columns:
         except Exception as e:
             print(f"Skipping row: {e}")
 
-email_html_content += "</ul><p><small>PatiLog Botu Tarafından Gönderilmiştir.</small></p>"
+# Close the ICS file format
+ics_content.append("END:VCALENDAR")
+ics_text = "\n".join(ics_content)
 
-# --- SEND EMAIL ---
+email_html_content += "</ul><p><small>Apple/iOS kullanıcıları ekteki dosyaya tıklayarak takvime ekleyebilir.</small></p>"
+
+# --- SEND EMAIL (MULTIPART) ---
 if alerts_found:
-    print("Sending email...")
+    print("Sending email with attachment...")
     
-    # Switch MIME type to HTML
-    msg = MIMEText(email_html_content, 'html')
-    msg['Subject'] = "🔔 PatiLog: Aşı Hatırlatması (+Takvim Linki)"
+    # Create the complex email object
+    msg = MIMEMultipart()
+    msg['Subject'] = "🔔 PatiLog: Aşı Hatırlatması"
     msg['From'] = SENDER_EMAIL
     msg['To'] = ", ".join(RECEIVER_EMAILS)
+    
+    # Attach the HTML body
+    msg.attach(MIMEText(email_html_content, 'html'))
+    
+    # Create the Attachment
+    part = MIMEBase('text', 'calendar')
+    part.set_payload(ics_text)
+    encoders.encode_base64(part)
+    part.add_header(
+        'Content-Disposition',
+        f'attachment; filename=patilog_takvim.ics',
+    )
+    msg.attach(part)
 
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
