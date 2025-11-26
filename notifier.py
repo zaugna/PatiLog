@@ -9,7 +9,6 @@ import os
 import json
 import urllib.parse
 import uuid
-import hashlib
 
 # --- SETUP ---
 json_creds = os.environ["GCP_CREDENTIALS"]
@@ -28,13 +27,18 @@ SENDER_EMAIL = os.environ["EMAIL_USER"]
 SENDER_PASSWORD = os.environ["EMAIL_PASS"]
 RECEIVER_EMAILS = os.environ["EMAIL_TO"].split(",") 
 
-# --- HELPER: CLEAN TEXT ---
+# --- HELPER: CLEAN TEXT (Aggressive) ---
 def clean_text(text):
     if not text: return ""
-    return str(text).replace("\n", " ").replace("\r", " ").replace(";", "").replace(",", " ").strip()
+    # Ensure string, strip spaces
+    s = str(text).strip()
+    # Escape special ICS characters
+    s = s.replace("\\", "\\\\").replace(";", "\;").replace(",", "\,")
+    return s.replace("\n", " ")
 
 # --- HELPER: GOOGLE LINK ---
 def create_gcal_link(title, date_obj):
+    # Google Link uses Local Time (09:00)
     start_str = date_obj.strftime("%Y%m%dT090000")
     end_str = date_obj.strftime("%Y%m%dT091500")
     base_url = "https://www.google.com/calendar/render?action=TEMPLATE"
@@ -51,73 +55,79 @@ def create_gcal_link(title, date_obj):
 def send_file_email(pet, vaccine, due_date_obj, days_left):
     print(f"Preparing File for: {pet} - {vaccine}...")
     
-    event_title = f"{pet} - {vaccine}"
+    pet_clean = clean_text(pet)
+    vaccine_clean = clean_text(vaccine)
+    event_title = f"{pet_clean} - {vaccine_clean}"
+    
+    # 1. HTML Body
     due_date_str = due_date_obj.strftime("%d.%m.%Y")
     gcal_link = create_gcal_link(event_title, due_date_obj)
     urgency = "⚠️" if days_left > 3 else "🚨"
     
-    # 1. HTML Body
     html_body = f"""
     <h3>{urgency} PatiLog Hatırlatması</h3>
-    <p><strong>{pet}</strong> için <strong>{vaccine}</strong> zamanı geldi.</p>
+    <p><strong>{pet_clean}</strong> için <strong>{vaccine_clean}</strong> zamanı geldi.</p>
     <ul>
         <li>Tarih: {due_date_str}</li>
         <li>Kalan Gün: {days_left}</li>
     </ul>
-    <p><a href="{gcal_link}">Google Takvime Ekle</a></p>
-    <p>iOS: Ekteki dosyaya tıklayıp "Add to Calendar" diyebilirsiniz.</p>
+    <p><a href="{gcal_link}">Google Takvime Ekle (Android/Web)</a></p>
+    <p><small>iOS: Ekteki dosyayı açıp 'Add' (Ekle) diyebilirsiniz.</small></p>
     """
 
-    # 2. Build The "Dumb" ICS File (METHOD:PUBLISH)
-    dt_start = due_date_obj.strftime("%Y%m%dT090000")
-    dt_end = due_date_obj.strftime("%Y%m%dT091500")
+    # 2. Build ICS (UTC FIXED)
+    # Turkey is UTC+3. So 09:00 TRT = 06:00 UTC.
+    # We must use 'Z' to tell iOS this is absolute time.
+    dt_start = due_date_obj.strftime("%Y%m%dT060000Z") 
+    dt_end = due_date_obj.strftime("%Y%m%dT061500Z")
     now_str = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     
-    uid_raw = f"{pet}-{vaccine}-{due_date_str}"
-    unique_id = hashlib.md5(uid_raw.encode()).hexdigest() + "@patilog"
+    uid = str(uuid.uuid4())
+    
+    # Description with explicit newlines handling
+    description = f"{pet_clean} icin {vaccine_clean} asisi."
 
     ics_content = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
         "PRODID:-//PatiLog//Vaccine Check//TR",
-        "METHOD:PUBLISH", # PUBLISH = Snapshot (Not an invite)
+        "METHOD:PUBLISH",
         "BEGIN:VEVENT",
-        f"UID:{unique_id}",
+        f"UID:{uid}",
         f"DTSTAMP:{now_str}",
         f"DTSTART:{dt_start}",
         f"DTEND:{dt_end}",
         f"SUMMARY:{event_title}",
+        f"DESCRIPTION:{description}",
         "STATUS:CONFIRMED",
         "TRANSP:OPAQUE",
         "END:VEVENT",
         "END:VCALENDAR"
     ]
-    # Removed DESCRIPTION to keep it clean (as you requested)
     
     ics_text = "\r\n".join(ics_content)
 
-    # 3. Construct Email (Multipart/Mixed = Body + Attachment)
+    # 3. Construct Email
     msg = MIMEMultipart('mixed') 
-    msg['Subject'] = f"{urgency} {pet}: {vaccine} Hatırlatması"
+    msg['Subject'] = f"{urgency} {pet_clean}: {vaccine_clean}"
     msg['From'] = SENDER_EMAIL
     msg['To'] = ", ".join(RECEIVER_EMAILS)
 
-    # Part 1: HTML
+    # Body
     msg.attach(MIMEText(html_body, 'html'))
 
-    # Part 2: The Attachment (Pure File)
-    # We purposefully remove "content-class" and "inline" to force it to behave like a file
+    # Attachment (Plain Text, explicitly UTF-8)
     attachment = MIMEText(ics_text, 'calendar; method=PUBLISH', 'utf-8')
-    attachment.add_header('Content-Disposition', 'attachment', filename='reminder.ics')
+    attachment.add_header('Content-Disposition', 'attachment', filename='invite.ics')
     msg.attach(attachment)
 
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.sendmail(SENDER_EMAIL, RECEIVER_EMAILS, msg.as_string())
-        print(f"✅ Sent file for {pet} - {vaccine}")
+        print(f"✅ Sent file for {pet_clean}")
     except Exception as e:
-        print(f"❌ Failed to send for {pet}: {e}")
+        print(f"❌ Failed to send: {e}")
 
 # --- MAIN LOOP ---
 today = date.today()
@@ -135,8 +145,8 @@ if not df.empty and "Sonraki Tarih" in df.columns:
             days_left = (due_date_obj - today).days
             
             if 0 <= days_left <= 7:
-                pet = clean_text(row["Pet İsmi"])
-                vaccine = clean_text(row["Aşı Tipi"])
+                pet = str(row["Pet İsmi"])
+                vaccine = str(row["Aşı Tipi"])
                 send_file_email(pet, vaccine, due_date_obj, days_left)
                 
         except Exception as e:
