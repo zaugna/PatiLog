@@ -5,8 +5,6 @@ from google.oauth2.service_account import Credentials
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
 import os
 import json
 import urllib.parse
@@ -29,6 +27,12 @@ SENDER_EMAIL = os.environ["EMAIL_USER"]
 SENDER_PASSWORD = os.environ["EMAIL_PASS"]
 RECEIVER_EMAILS = os.environ["EMAIL_TO"].split(",") 
 
+# --- HELPER: CLEAN TEXT FOR ICS ---
+def clean_text(text):
+    # ICS format breaks if there are newlines in the summary
+    if not text: return ""
+    return str(text).replace("\n", " ").replace("\r", " ").strip()
+
 # --- HELPER: GOOGLE CALENDAR LINK ---
 def create_gcal_link(title, date_obj):
     date_str = date_obj.strftime("%Y%m%d")
@@ -50,7 +54,7 @@ print(f"--- Running PatiLog Check for {today} ---")
 email_html_content = "<h3>🐾 PatiLog Aşı Hatırlatması</h3><ul>"
 alerts_found = False
 
-# ICS HEADER (Strict Compliance)
+# ICS HEADER (Standardized)
 ics_lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
@@ -73,17 +77,16 @@ if not df.empty and "Sonraki Tarih" in df.columns:
             # Logic: Alert if within next 7 days
             if 0 <= days_left <= 7:
                 alerts_found = True
-                pet = row["Pet İsmi"]
-                vaccine = row["Aşı Tipi"]
+                pet = clean_text(row["Pet İsmi"])
+                vaccine = clean_text(row["Aşı Tipi"])
                 event_title = f"{pet} - {vaccine}"
                 
                 # 1. Google Link
                 gcal_link = create_gcal_link(event_title, due_date)
                 
-                # 2. Add to ICS (Strict UTC Timestamp)
+                # 2. Add to ICS
                 dt_start = due_date.strftime("%Y%m%d")
                 dt_end = (due_date + timedelta(days=1)).strftime("%Y%m%d")
-                # FIX: Use UTC now time for the stamp
                 now_str = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
                 unique_id = str(uuid.uuid4())
                 
@@ -115,11 +118,11 @@ if not df.empty and "Sonraki Tarih" in df.columns:
 ics_lines.append("END:VCALENDAR")
 ics_full_text = "\r\n".join(ics_lines)
 
-email_html_content += "</ul><p><small>iOS: Ekteki dosyaya tıklayıp 'Hepsini Ekle' diyebilirsiniz.</small></p>"
+email_html_content += "</ul><p><small>iOS: Ekteki dosyaya tıklayıp takvime ekleyebilirsiniz.</small></p>"
 
-# --- SEND EMAIL ---
+# --- SEND EMAIL (MULTIPART) ---
 if alerts_found:
-    print("Sending email...")
+    print("Sending email with PlainText UTF-8 attachment...")
     
     msg = MIMEMultipart()
     msg['Subject'] = "🔔 PatiLog: Aşı Hatırlatması"
@@ -128,17 +131,11 @@ if alerts_found:
     
     msg.attach(MIMEText(email_html_content, 'html'))
     
-    # ATTACHMENT HANDLING
-    part = MIMEBase('text', 'calendar', method='PUBLISH', name='patilog.ics')
-    part.set_payload(ics_full_text.encode('utf-8'))
-    encoders.encode_base64(part)
-    
-    # iOS Magic Headers
-    part.add_header('Content-Description', 'patilog.ics')
-    part.add_header('Content-Disposition', 'attachment; filename="patilog.ics"')
-    part.add_header('Content-Type', 'text/calendar; charset="utf-8"; name="patilog.ics"')
-    
-    msg.attach(part)
+    # ATTACHMENT HANDLING - THE FIX
+    # We use MIMEText instead of MIMEBase to handle the UTF-8 encoding automatically
+    attachment = MIMEText(ics_full_text, 'calendar', 'utf-8')
+    attachment.add_header('Content-Disposition', 'attachment', filename='patilog.ics')
+    msg.attach(attachment)
 
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
