@@ -90,20 +90,10 @@ def save_entry(pet_name, vaccine, date_applied, next_due_date, weight):
         worksheet.append_row(["Pet İsmi", "Aşı Tipi", "Uygulama Tarihi", "Sonraki Tarih", "Kilo (kg)"])
     worksheet.append_row([pet_name, vaccine, str(date_applied), str(next_due_date), weight])
 
-def delete_rows(indexes_to_keep):
-    sh = get_db()
-    worksheet = sh.get_worksheet(0)
-    df = load_data()
-    if not df.empty:
-        df_cleaned = df.iloc[indexes_to_keep]
-        worksheet.clear()
-        worksheet.append_row(["Pet İsmi", "Aşı Tipi", "Uygulama Tarihi", "Sonraki Tarih", "Kilo (kg)"])
-        if not df_cleaned.empty:
-            worksheet.append_rows(df_cleaned.values.tolist())
-
 # --- SIDEBAR ---
 st.sidebar.title("🐾 PatiLog")
-menu = st.sidebar.radio("Menü", ["Genel Bakış (Kartlar)", "Düzenle / Sil", "Yeni Kayıt Ekle"])
+# REMOVED: "Düzenle / Sil" from the menu list
+menu = st.sidebar.radio("Menü", ["Genel Bakış (Kartlar)", "Yeni Kayıt Ekle"])
 df = load_data()
 
 # --- PAGE 1: CARDS & NEW PLOTLY CHART ---
@@ -184,37 +174,10 @@ if menu == "Genel Bakış (Kartlar)":
                 display_df["Uygulama Tarihi"] = pd.to_datetime(display_df["Uygulama Tarihi"]).dt.strftime('%d.%m.%Y')
                 display_df["Sonraki Tarih"] = pd.to_datetime(display_df["Sonraki Tarih"]).dt.strftime('%d.%m.%Y')
                 
-                # --- FIX: USE DATAFRAME TO HIDE INDEX ---
                 st.dataframe(display_df, hide_index=True, use_container_width=True)
 
     else:
         st.info("Kayıt yok.")
-
-# --- PAGE 2: DELETE ---
-elif menu == "Düzenle / Sil":
-    st.header("📝 Kayıt Yönetimi")
-    if not df.empty:
-        df["Sil"] = False
-        if "Sonraki Tarih" in df.columns:
-            df["Sonraki Tarih"] = pd.to_datetime(df["Sonraki Tarih"], format="%Y-%m-%d", errors='coerce')
-            df = df.sort_values(by="Sonraki Tarih")
-
-        column_config = {
-            "Sil": st.column_config.CheckboxColumn("Sil?", default=False, width="small"),
-            "Pet İsmi": st.column_config.TextColumn("İsim", disabled=True),
-            "Sonraki Tarih": st.column_config.DateColumn("Tarih", format="DD.MM.YYYY", disabled=True),
-        }
-        edited_df = st.data_editor(df, column_config=column_config, hide_index=True, use_container_width=True)
-        rows_to_delete = edited_df[edited_df["Sil"] == True]
-        if not rows_to_delete.empty:
-            if st.button(f"🗑️ Seçili {len(rows_to_delete)} Kaydı Sil", type="primary"):
-                indexes_to_keep = edited_df[edited_df["Sil"] == False].index.tolist()
-                try:
-                    delete_rows(indexes_to_keep)
-                    st.success("Silindi!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Hata: {e}")
 
 # --- PAGE 3: NEW ENTRY ---
 elif menu == "Yeni Kayıt Ekle":
@@ -254,4 +217,3 @@ elif menu == "Yeni Kayıt Ekle":
             st.rerun()
         else:
             st.warning("İsim giriniz.")
-
